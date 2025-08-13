@@ -3,28 +3,27 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-  <title>WorldAR — Unity WebGL + Zappar</title>
-
+  <title>WorldAR — Intro → Меню → Дасгал</title>
   <style>
-    html,body{margin:0;height:100%;background:#000;font-family:system-ui,Arial;-webkit-tap-highlight-color:transparent}
-    /* Камер фон */
-    #videoCam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;transform:scaleX(-1)}
-    /* Unity canvas */
+    html,body{margin:0;height:100%;background:#000;font-family:system-ui,Arial}
+    /* Камер фийд (фон) */
+    #videoCam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;transform:scaleX(-1);background:#000}
+    /* Unity */
     #unity-canvas{position:fixed;inset:0;width:100vw;height:100vh;background:transparent;z-index:1;touch-action:none}
-    /* overlays */
+    /* Overlay-ууд */
     .overlay{position:fixed;inset:0;z-index:9000;display:none;align-items:center;justify-content:center;background:transparent}
     .overlay video{max-width:100%;max-height:100%;object-fit:contain}
-    /* Меню */
-    #menu{position:fixed;left:0;right:0;bottom:16vh;z-index:9999;display:none;gap:10px;justify-content:center}
+    /* Доод меню */
+    #menu{position:fixed;left:0;right:0;bottom:10vh;z-index:9500;display:none;gap:10px;justify-content:center}
     .btn{padding:12px 16px;border:0;border-radius:14px;font-weight:700;background:#fff}
-    /* Fallback start (амжилтгүй үед л харагдана) */
+    /* Fallback + мэдэгдэл */
     #fallback{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:99999}
-    #toast{position:fixed;left:50%;top:12px;transform:translateX(-50%);background:#111;color:#fff;padding:8px 12px;border-radius:10px;opacity:.9;display:none;z-index:99999}
+    #toast{position:fixed;left:50%;top:12px;transform:translateX(-50%);background:#111;color:#fff;padding:8px 12px;border-radius:10px;opacity:.95;display:none;z-index:99999}
   </style>
 
-  <!-- Zappar low-level (автоматаар ачаалж permission-ийг шууд асуух урсгал) -->
+  <!-- Zappar (low-level) -->
   <script defer src="https://cdn.jsdelivr.net/npm/@zappar/zappar@latest/dist/zappar.umd.min.js"></script>
-  <!-- Unity loader -->
+  <!-- Unity loader (таны build-аас) -->
   <script defer src="Build/Build.loader.js"></script>
 </head>
 <body>
@@ -34,12 +33,12 @@
   <!-- Unity canvas -->
   <canvas id="unity-canvas" tabindex="-1"></canvas>
 
-  <!-- Интро overlay -->
+  <!-- Интро -->
   <div id="introOverlay" class="overlay">
     <video id="introVid" playsinline webkit-playsinline></video>
   </div>
 
-  <!-- Дасгал overlay -->
+  <!-- Дасгал -->
   <div id="exOverlay" class="overlay">
     <video id="exVid" playsinline webkit-playsinline controls></video>
   </div>
@@ -51,33 +50,47 @@
     <button id="mKnowledge" class="btn">Мэдлэг</button>
   </div>
 
-  <!-- Fallback (зөвхөн iOS autoplay/permission алдаа гарвал харагдана) -->
+  <!-- Fallback -->
   <div id="fallback"><button id="btnStart" class="btn">Start AR</button></div>
   <div id="toast"></div>
 
 <script>
-(() => {
-  // -------- CONFIG --------
-  const VID = {
-    intro:  isIOS() ? "assets/intro_ios.mov"  : "assets/intro.webm",
-    ex:     isIOS() ? "assets/dasgal_ios.mov" : "assets/dasgal.webm"
+(()=>{
+
+  // ====================== CONFIG — ЭНД URL-УУДАА ТАВЬ ======================
+  const CONFIG = {
+    // Интро
+    intro: {
+      webm: "https://batbaatar-anu.github.io/my-ar-host/output_alpha_audio.webm",          // Android/Chrome (VP9 + alpha болбол бүр OK)
+      ios:  "https://your.cdn/intro_ios.mov"         // iOS Safari (HEVC alpha)
+    },
+    // Дасгалын видео
+    exercise: {
+      webm: "https://batbaatar-anu.github.io/my-ar-host/dasgal.webm",
+      ios:  "https://your.cdn/dasgal_ios.mov"
+    }
   };
+  // ========================================================================
 
+  // Platform helper
+  const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints>1);
+
+  // State
   let unityInstance=null, gl=null;
-  let pipeline, htmlSrc, tracker, placeMode=true;
-  let mediaStream=null;
+  let pipeline, htmlSrc, tracker, placeMode=true, mediaStream=null;
 
-  // Нүүрэн дээр дарахад Place/Lock солих (товчгүй UX)
+  // Дэлгэцийн хоосон хэсэгт товшвол Place/Lock toggle (товчгүй UX)
   window.addEventListener('click', (e)=>{
-    // overlay/меню дээр дарахад үгүй
-    if (document.getElementById('introOverlay').style.display==='flex') return;
-    if (document.getElementById('exOverlay').style.display==='flex') return;
-    if (document.getElementById('menu').style.display==='flex') return;
+    const id = (e.target && e.target.id) || '';
+    if (['introVid','exVid','mExercise','mGrowth','mKnowledge','btnStart'].includes(id)) return;
+    // overlay/menu дээр дараагүй үед
+    if (isVisible('introOverlay') || isVisible('exOverlay') || isVisible('menu')) return;
     placeMode = !placeMode;
     toast(placeMode ? 'Placement ON' : 'Locked');
   });
 
-  // Unity-г эхлүүлээд дараа нь бүх урсгалыг автоматаар эхлүүлнэ
+  // --- Unity эхлүүлэх ---
   createUnityInstance(document.getElementById('unity-canvas'), {
     dataUrl:"Build/Build.data.unityweb",
     frameworkUrl:"Build/Build.framework.js.unityweb",
@@ -89,48 +102,68 @@
     gl=(inst.Module&&inst.Module.ctx)
       || document.getElementById('unity-canvas').getContext('webgl2')
       || document.getElementById('unity-canvas').getContext('webgl');
-
-    // Хуудас ачаалмагц шууд permission → AR урсгал
-    autoStart().catch(()=> {
-      // iOS эсвэл хөтөчийн бодлогын зөрчлөөс болж амжилтгүй бол fallback гаргана
-      document.getElementById('fallback').style.display='flex';
-    });
+    autoStart().catch(()=> showFallback());
   });
 
-  // Fallback товч (амжилтгүй үед)
+  // --- Fallback товч ---
   document.getElementById('btnStart').addEventListener('click', ()=>{
-    autoStart().then(()=> document.getElementById('fallback').style.display='none');
+    hide('fallback');
+    autoStart().catch(()=> showFallback());
   }, {passive:true});
 
+  // --- Гол урсгал ---
   async function autoStart(){
-    await startCamera();     // permission энд асна
-    await zapparInit();      // pipeline/source/tracker
-    startIntro();            // интро → дуусаад меню
+    // 1) Камер (permission энд л асна)
+    const ok = await startCamera();
+    if (!ok) throw new Error('camera-failed');
+
+    // 2) Zappar world tracking
+    await zapparInit();
+
+    // 3) Интро → Меню
+    await playIntroThenMenu();
   }
 
+  // Камер асаах
   async function startCamera(){
     const cam=document.getElementById('videoCam');
-    if (!mediaStream){
-      mediaStream = await navigator.mediaDevices.getUserMedia({
-        video:{ facingMode:{ideal:'environment'} }, audio:false
-      });
-      cam.srcObject=mediaStream;
+
+    // Permission API-ээр урьдчилан шалгах (зарим browser-д ажиллахгүй)
+    if (navigator.permissions && navigator.permissions.query) {
+      try {
+        const st = await navigator.permissions.query({ name: 'camera' });
+        if (st.state === 'denied') {
+          toast('Камер блоклогдсон. Site settings → Camera → Allow → Reload.');
+          return false;
+        }
+      } catch(e){}
     }
-    // iOS дээр play() заримдаа user gesture шаарддаг — try/catch
-    try { await cam.play(); } catch(e) { /* fallback дээр шийднэ */ }
+
+    try{
+      mediaStream=await navigator.mediaDevices.getUserMedia({ video:{facingMode:{ideal:'environment'}}, audio:false });
+      cam.srcObject=mediaStream;
+      await cam.play().catch(()=>{});
+      return true;
+    }catch(err){
+      console.error('getUserMedia:',err);
+      toast(err.name==='NotAllowedError'?'Камерын зөвшөөрөл хэрэгтэй. Allow → Reload.'
+           : err.name==='NotFoundError'  ?'Камер олдсонгүй.'
+           : 'Камер асаахад алдаа гарлаа.');
+      return false;
+    }
   }
 
+  // Zappar init
   async function zapparInit(){
     await waitForZappar();
-    pipeline = new Zappar.Pipeline();
-    if (gl) pipeline.glContextSet(gl);
+    pipeline=new Zappar.Pipeline();
+    if(gl) pipeline.glContextSet(gl);
 
     const cam=document.getElementById('videoCam');
-    htmlSrc = new Zappar.HTMLElementSource(pipeline, cam);
-    tracker = new Zappar.InstantWorldTracker(pipeline);
-    placeMode=true;
-
+    htmlSrc=new Zappar.HTMLElementSource(pipeline, cam);
+    tracker=new Zappar.InstantWorldTracker(pipeline);
     htmlSrc.start();
+    placeMode=true;
     raf();
   }
 
@@ -141,75 +174,79 @@
     if (placeMode) tracker.setAnchorPoseFromCameraOffset(0,0,-1.5);
 
     const camPose = pipeline.cameraPoseWithAttitude();
-    const m = tracker.anchor.pose(camPose, false);
+    const m = tracker.anchor.pose(camPose,false);
     const pose = matrixToTRS(m);
     if (unityInstance){
-      unityInstance.SendMessage("WorldAnchor","OnPoseJson", JSON.stringify(pose));
+      unityInstance.SendMessage('WorldAnchor','OnPoseJson', JSON.stringify(pose));
     }
     requestAnimationFrame(raf);
   }
 
-  // --- Интро/меню/видео ---
-  function startIntro(){
+  // --- Интро → Меню ---
+  async function playIntroThenMenu(){
+    const url = isIOS() ? CONFIG.intro.ios : CONFIG.intro.webm;
     const o = document.getElementById('introOverlay');
     const v = document.getElementById('introVid');
-    setVideo(v, VID.intro, false);
-    o.style.display='flex';
-    v.currentTime=0;
-    v.play().catch(()=>{ /* iOS дээр гарч ирж болно */ });
-    v.onended = () => { o.style.display='none'; showMenu(); };
+    v.src = url;
+    v.loop = false;
+    v.muted = true;                 // iOS autoplay зөвшөөрөхөд тусална
+    show('introOverlay');
+    try { await v.play(); } catch(e) {
+      // gesture шаардвал fallback (товшиход тоглоно)
+      v.controls = true;
+      toast('Интро эхлүүлэхийн тулд Play товчийг дарна уу.');
+    }
+    v.onended = ()=>{ hide('introOverlay'); show('menu'); };
   }
 
-  function showMenu(){ document.getElementById('menu').style.display='flex'; }
-
+  // Меню — Дасгал
   document.getElementById('mExercise').addEventListener('click', ()=>{
-    document.getElementById('menu').style.display='none';
+    hide('menu');
+    const url = isIOS() ? CONFIG.exercise.ios : CONFIG.exercise.webm;
     const o = document.getElementById('exOverlay');
     const v = document.getElementById('exVid');
-    setVideo(v, VID.ex, true);
-    o.style.display='flex';
-    v.currentTime=0; v.play().catch(()=>{});
-    v.onended = () => { o.style.display='none'; showMenu(); };
+    v.src = url;
+    v.loop = false;
+    v.muted = false;    // дасгалын видео дуутай
+    v.currentTime = 0;
+    show('exOverlay');
+    v.play().catch(()=>{});
+    v.onended = ()=>{ hide('exOverlay'); show('menu'); };
   });
-  document.getElementById('mGrowth').addEventListener('click', ()=> alert('Хувийн хөгжил — контент холбоно.'));
-  document.getElementById('mKnowledge').addEventListener('click', ()=> alert('Мэдлэг — контент холбоно.'));
 
-  // --- Helpers ---
-  function setVideo(videoEl, src, controls){
-    videoEl.src = src;
-    videoEl.loop = false;
-    videoEl.muted = false;
-    videoEl.controls = !!controls;
-  }
+  // Меню — Хувийн хөгжил / Мэдлэг (placeholder)
+  document.getElementById('mGrowth').addEventListener('click', ()=> alert('Хувийн хөгжлийн контентыг энд холбоно.'));
+  document.getElementById('mKnowledge').addEventListener('click', ()=> alert('Мэдлэгийн контентыг энд холбоно.'));
 
+  // ---------------- Helpers ----------------
   function matrixToTRS(m){
     const px=m[12], py=m[13], pz=m[14];
     const m00=m[0], m01=m[4], m02=m[8], m10=m[1], m11=m[5], m12=m[9], m20=m[2], m21=m[6], m22=m[10];
     const tr=m00+m11+m22; let qw,qx,qy,qz;
-    if (tr>0){const S=Math.sqrt(tr+1.0)*2; qw=0.25*S; qx=(m21-m12)/S; qy=(m02-m20)/S; qz=(m10-m01)/S;}
-    else if (m00>m11&&m00>m22){const S=Math.sqrt(1.0+m00-m11-m22)*2; qw=(m21-m12)/S; qx=0.25*S; qy=(m01+m10)/S; qz=(m02+m20)/S;}
-    else if (m11>m22){const S=Math.sqrt(1.0+m11-m00-m22)*2; qw=(m02-m20)/S; qx=(m01+m10)/S; qy=0.25*S; qz=(m12+m21)/S;}
+    if(tr>0){const S=Math.sqrt(tr+1.0)*2; qw=0.25*S; qx=(m21-m12)/S; qy=(m02-m20)/S; qz=(m10-m01)/S;}
+    else if(m00>m11&&m00>m22){const S=Math.sqrt(1.0+m00-m11-m22)*2; qw=(m21-m12)/S; qx=0.25*S; qy=(m01+m10)/S; qz=(m02+m20)/S;}
+    else if(m11>m22){const S=Math.sqrt(1.0+m11-m00-m22)*2; qw=(m02-m20)/S; qx=(m01+m10)/S; qy=0.25*S; qz=(m12+m21)/S;}
     else {const S=Math.sqrt(1.0+m22-m00-m11)*2; qw=(m10-m01)/S; qx=(m02+m20)/S; qy=(m12+m21)/S; qz=0.25*S;}
     return {px,py,pz,qx,qy,qz,qw,sx:1,sy:1,sz:1};
   }
 
   function waitForZappar(){
     return new Promise(r=>{
-      if (window.Zappar) return r();
-      const t=setInterval(()=>{ if (window.Zappar){ clearInterval(t); r(); }}, 20);
+      if(window.Zappar) return r();
+      const t=setInterval(()=>{ if(window.Zappar){ clearInterval(t); r(); }},20);
     });
   }
 
-  function isIOS(){
-    return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints>1);
-  }
-
+  function show(id){ document.getElementById(id).style.display='flex'; }
+  function hide(id){ document.getElementById(id).style.display='none'; }
+  function isVisible(id){ return document.getElementById(id).style.display==='flex'; }
   function toast(msg){
     const t=document.getElementById('toast');
     t.textContent=msg; t.style.display='block';
-    clearTimeout(t._tid);
-    t._tid=setTimeout(()=>t.style.display='none', 1200);
+    clearTimeout(t._tid); t._tid=setTimeout(()=> t.style.display='none', 1500);
   }
+  function showFallback(){ show('fallback'); }
+
 })();
 </script>
 </body>
